@@ -12,6 +12,7 @@ use Encode;
 use Getopt::Long;
 use HTTP::Tiny;
 use JSON;
+use List::Util qw{first};
 use Pod::Usage;
 use Readonly;
 use Term::ANSIColor;
@@ -149,7 +150,7 @@ sub main {
     if ( $option_of{'man'} ) {
         pod2usage(-verbose => 2);
     }
-    if ( !grep { $option_of{'color'} eq $_ } @color_option ) {
+    if ( !first { $option_of{'color'} eq $_ } @color_option ) {
         croak "错误：不存在$option_of{'color'}选项！";
     }
     if ( @ARGV == 0 ) {
