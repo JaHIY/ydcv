@@ -40,19 +40,36 @@ sub get_json_for_definition_of {
     }
 }
 
+sub colored_method {
+    my ( $method ) = @_;
+    my $print_content_only_sub_ref = sub {
+        my ( $content, $color ) = @_;
+            return $content;
+    };
+    if ( $method eq 'never' ) {
+        return $print_content_only_sub_ref;
+    }
+    elsif ( $method eq 'auto' and ! -t *STDOUT ) {
+        return $print_content_only_sub_ref;
+    }
+    else {
+        return \&colored;
+    }
+}
+
 sub print_explanation {
-    my ( $dict_hash_ref, %option_of ) = @_;
-    print colored ['underline'], $dict_hash_ref->{'query'};
+    my ( $dict_hash_ref, $option_hash_ref, $colored_methed_sub_ref ) = @_;
+    print $colored_methed_sub_ref->( $dict_hash_ref->{'query'}, 'underline' );
     if ( exists $dict_hash_ref->{'basic'} ) {
         my $basic = $dict_hash_ref->{'basic'};
         if ( exists $basic->{'phonetic'} ) {
-            printf " [%s]\n", colored( $basic->{'phonetic'}, 'yellow' );
+            printf " [%s]\n", $colored_methed_sub_ref->( $basic->{'phonetic'}, 'yellow' );
         }
         else {
             print "\n";
         }
         if ( exists $basic->{'explains'} ) {
-            print colored ['cyan'], '  Word Explanation:', "\n";
+            print $colored_methed_sub_ref->('  Word Explanation:', 'cyan'), "\n";
             my @explains = @{$basic->{'explains'}};
             for my $explain ( @explains ) {
                 printf "     * %s\n", $explain;
@@ -63,7 +80,7 @@ sub print_explanation {
         }
     }
     elsif ( exists $dict_hash_ref->{'translation'} ) {
-            print colored ['cyan'], "\n", '  Translation:', "\n";
+            print "\n", $colored_methed_sub_ref->('  Translation:', 'cyan'), "\n";
             my @translations = @{$dict_hash_ref->{'translation'}};
             for my $translation ( @translations ) {
                 printf "     * %s\n", $translation;
@@ -73,13 +90,13 @@ sub print_explanation {
         print "\n";
     }
 
-    if ( !$option_of{'simple'} ) {
+    if ( !$option_hash_ref->{'simple'} ) {
         if ( exists $dict_hash_ref->{'web'} ) {
-            print colored ['cyan'], "\n", '  Web Reference:', "\n";
-            my @web_references = $option_of{'full'} ? @{$dict_hash_ref->{'web'}} : @{$dict_hash_ref->{'web'}}[0..2];
+            print "\n", $colored_methed_sub_ref->('  Web Reference:', 'cyan'), "\n";
+            my @web_references = $option_hash_ref->{'full'} ? @{$dict_hash_ref->{'web'}} : @{$dict_hash_ref->{'web'}}[0..2];
             for my $web_reference ( @web_references ) {
                 #print Dumper $web_reference;
-                printf "     * %s\n       %s\n", colored( $web_reference->{'key'}, 'yellow' ), join( '; ', map { colored($_, 'magenta') } @{$web_reference->{'value'}} );
+                printf "     * %s\n       %s\n", $colored_methed_sub_ref->( $web_reference->{'key'}, 'yellow' ), join( '; ', map { $colored_methed_sub_ref->($_, 'magenta') } @{$web_reference->{'value'}} );
             }
         }
     }
@@ -87,12 +104,12 @@ sub print_explanation {
 }
 
 sub look_up {
-    my ( $word, %option_of ) = @_;
+    my ( $word, $option_hash_ref ) = @_;
     my $dict_hash_ref = get_json_for_definition_of( $word );
     my $error_code = $dict_hash_ref->{'errorCode'};
     #$error_code = 50;
     if ( $error_code == 0 ) {
-        print_explanation( $dict_hash_ref, %option_of );
+        print_explanation( $dict_hash_ref, $option_hash_ref, colored_method($option_hash_ref->{'color'}) );
     }
     else {
         croak sprintf( '错误代码：%d，%s',
@@ -116,6 +133,10 @@ sub main {
                       man    => 0,
                       simple => 0,
                     );
+    my @color_option = ( 'always',
+                         'auto',
+                         'never',
+                       );
     GetOptions( 'color=s'  => \$option_of{'color'},
                 'help|h'   => \$option_of{'help'},
                 'full|f'   => \$option_of{'full'},
@@ -128,16 +149,19 @@ sub main {
     if ( $option_of{'man'} ) {
         pod2usage(-verbose => 2);
     }
+    if ( !grep { $option_of{'color'} eq $_ } @color_option ) {
+        croak "错误：不存在$option_of{'color'}选项！";
+    }
     if ( @ARGV == 0 ) {
         my $term = Term::ReadLine->new('YouDao Console Version');
         $term->ornaments(0);
         while ( defined( my $word = $term->readline('> ') ) ) {
-            look_up( $word, %option_of );
+            look_up( $word, \%option_of );
             $term->addhistory($word);
         }
     } else {
         for my $word ( @ARGV ) {
-            look_up( $word, %option_of );
+            look_up( $word, \%option_of );
         }
     }
 }
