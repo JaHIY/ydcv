@@ -36,7 +36,7 @@ sub get_json_for_definition_of {
         }
     }
     else {
-        croak '无法连接有道服务器！';
+        croak '错误：无法连接有道服务器！';
     }
 }
 
