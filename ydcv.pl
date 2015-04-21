@@ -7,32 +7,49 @@ use autodie;
 use 5.010;
 
 use Carp;
-use Data::Dumper;
 use Encode;
 use Getopt::Long;
 use HTTP::Tiny;
 use JSON;
-use List::Util qw{first};
+use List::Util qw(first);
 use Pod::Usage;
-use Readonly;
 use Term::ANSIColor;
 use Term::ReadLine;
-use URI::Escape;
+use URI;
+use URI::QueryParam;
 
-Readonly my $API_NAME => q{YouDaoCV};
-Readonly my $API_KEY  => q{659600698};
-Readonly my $API_URL => qq{http://fanyi.youdao.com/openapi.do?keyfrom=${API_NAME}&key=${API_KEY}&type=data&doctype=json&version=1.1&q=};
+my $API_NAME     = q{YouDaoCV};
+my $API_KEY      = q{659600698};
+my $API_BASE_URL = q{http://fanyi.youdao.com/openapi.do};
+my $API_URI      = do {
+    my %query_params = (
+        keyfrom => $API_NAME,
+        key     => $API_KEY,
+        type    => 'data',
+        doctype => 'json',
+        version => '1.1',
+    );
+    my $api_uri = URI->new( $API_BASE_URL );
+    $api_uri->query_form_hash( \%query_params );
+    $api_uri;
+};
+
+sub build_api_url_with {
+    my ( $query_params_ref ) = @_;
+    my $api_uri = $API_URI->clone;
+    map { $api_uri->query_param_append( $_, $query_params_ref->{ $_ } ) } keys %{ $query_params_ref };
+    return $api_uri;
+}
 
 sub get_json_for_definition_of {
     my ( $word ) = @_;
     my $http = HTTP::Tiny->new;
-    my $response = $http->request('GET', $API_URL.uri_escape( $word ) );
+    my $response = $http->request( 'GET', build_api_url_with( {
+                q => $word,
+            } ) );
     if ( $response->{'success'} ) {
-        #print "$response->{'status'} $response->{'reason'}\n";
         if ( length $response->{'content'} ) {
-            #print $response->{'content'};
             my $dict_hash_ref = JSON->new->utf8->decode( $response->{'content'} );
-            #print Dumper($dict_hash_ref);
             return $dict_hash_ref;
         }
     }
@@ -41,17 +58,18 @@ sub get_json_for_definition_of {
     }
 }
 
+sub print_content_only {
+    my ( $content ) = @_;
+    return $content;
+}
+
 sub colored_method {
     my ( $method ) = @_;
-    my $print_content_only_sub_ref = sub {
-        my ( $content, $color ) = @_;
-            return $content;
-    };
     if ( $method eq 'never' ) {
-        return $print_content_only_sub_ref;
+        return \&print_content_only;
     }
-    elsif ( $method eq 'auto' and ! -t *STDOUT ) {
-        return $print_content_only_sub_ref;
+    elsif ( $method eq 'auto' and not -t *STDOUT ) {
+        return \&print_content_only;
     }
     else {
         return \&colored;
@@ -70,9 +88,9 @@ sub print_explanation {
             print "\n";
         }
         if ( exists $basic->{'explains'} ) {
-            print $colored_methed_sub_ref->('  Word Explanation:', 'cyan'), "\n";
-            my @explains = @{$basic->{'explains'}};
-            for my $explain ( @explains ) {
+            print $colored_methed_sub_ref->( '  Word Explanation:', 'cyan' ), "\n";
+            my @explains = @{ $basic->{'explains'} };
+            for my $explain (@explains) {
                 printf "     * %s\n", $explain;
             }
         }
@@ -81,11 +99,11 @@ sub print_explanation {
         }
     }
     elsif ( exists $dict_hash_ref->{'translation'} ) {
-            print "\n", $colored_methed_sub_ref->('  Translation:', 'cyan'), "\n";
-            my @translations = @{$dict_hash_ref->{'translation'}};
-            for my $translation ( @translations ) {
-                printf "     * %s\n", $translation;
-            }
+        print "\n", $colored_methed_sub_ref->( '  Translation:', 'cyan' ), "\n";
+        my @translations = @{ $dict_hash_ref->{'translation'} };
+        for my $translation (@translations) {
+            printf "     * %s\n", $translation;
+        }
     }
     else {
         print "\n";
@@ -93,11 +111,10 @@ sub print_explanation {
 
     if ( !$option_hash_ref->{'simple'} ) {
         if ( exists $dict_hash_ref->{'web'} ) {
-            print "\n", $colored_methed_sub_ref->('  Web Reference:', 'cyan'), "\n";
-            my @web_references = $option_hash_ref->{'full'} ? @{$dict_hash_ref->{'web'}} : @{$dict_hash_ref->{'web'}}[0..2];
-            for my $web_reference ( @web_references ) {
-                #print Dumper $web_reference;
-                printf "     * %s\n       %s\n", $colored_methed_sub_ref->( $web_reference->{'key'}, 'yellow' ), join( '; ', map { $colored_methed_sub_ref->($_, 'magenta') } @{$web_reference->{'value'}} );
+            print "\n", $colored_methed_sub_ref->( '  Web Reference:', 'cyan' ), "\n";
+            my @web_references = $option_hash_ref->{'full'} ? @{ $dict_hash_ref->{'web'} } : @{ $dict_hash_ref->{'web'} }[0 .. 2];
+            for my $web_reference (@web_references) {
+                printf "     * %s\n       %s\n", $colored_methed_sub_ref->( $web_reference->{'key'}, 'yellow' ), join( '; ', map { $colored_methed_sub_ref->( $_, 'magenta' ) } @{ $web_reference->{'value'} } );
             }
         }
     }
@@ -106,49 +123,52 @@ sub print_explanation {
 
 sub look_up {
     my ( $word, $option_hash_ref ) = @_;
-    my $dict_hash_ref = get_json_for_definition_of( $word );
-    my $error_code = $dict_hash_ref->{'errorCode'};
-    #$error_code = 50;
+    my $dict_hash_ref = get_json_for_definition_of($word);
+    my $error_code    = $dict_hash_ref->{'errorCode'};
     if ( $error_code == 0 ) {
-        print_explanation( $dict_hash_ref, $option_hash_ref, colored_method($option_hash_ref->{'color'}) );
+        print_explanation( $dict_hash_ref, $option_hash_ref, colored_method( $option_hash_ref->{'color'} ) );
     }
     else {
-        croak sprintf( '错误代码：%d，%s',
-                                        $error_code,
-                                        $error_code == 20 ? '要翻译的文本过长！'  :
-                                        $error_code == 30 ? '无法进行有效的翻译！':
-                                        $error_code == 40 ? '无效的key！'         :
-                                        $error_code == 50 ? '不支持的语言类型！'  :
-                                        $error_code == 60 ? '无词典结果！'        :
-                                                            '未知错误！'
+        croak sprintf(
+            '错误代码：%d，%s', $error_code,
+            $error_code == 20   ? '要翻译的文本过长！'
+            : $error_code == 30 ? '无法进行有效的翻译！'
+            : $error_code == 40 ? '无效的key！'
+            : $error_code == 50 ? '不支持的语言类型！'
+            : $error_code == 60 ? '无词典结果！'
+            :                     '未知错误！'
         );
     }
 }
 
 sub main {
-    binmode *STDIN, ':encoding(utf8)';
+    binmode *STDIN,  ':encoding(utf8)';
     binmode *STDOUT, ':encoding(utf8)';
-    my %option_of = ( color  => 'auto',
-                      help   => 0,
-                      full   => 0,
-                      man    => 0,
-                      simple => 0,
-                    );
-    my @color_option = ( 'always',
-                         'auto',
-                         'never',
-                       );
-    GetOptions( 'color=s'  => \$option_of{'color'},
-                'help|h'   => \$option_of{'help'},
-                'full|f'   => \$option_of{'full'},
-                'man'      => \$option_of{'man'},
-                'simple|s' => \$option_of{'simple'},
+    binmode *STDERR, ':encoding(utf8)';
+    my %option_of = (
+        color  => 'auto',
+        help   => 0,
+        full   => 0,
+        man    => 0,
+        simple => 0,
+    );
+    my @color_option = qw/
+        always
+        auto
+        never
+        /;
+    GetOptions(
+        'color=s'  => \$option_of{'color'},
+        'help|h'   => \$option_of{'help'},
+        'full|f'   => \$option_of{'full'},
+        'man'      => \$option_of{'man'},
+        'simple|s' => \$option_of{'simple'},
     );
     if ( $option_of{'help'} ) {
         pod2usage 1;
     }
     if ( $option_of{'man'} ) {
-        pod2usage(-verbose => 2);
+        pod2usage( -verbose => 2 );
     }
     if ( !first { $option_of{'color'} eq $_ } @color_option ) {
         croak "错误：不存在$option_of{'color'}选项！";
@@ -160,7 +180,8 @@ sub main {
             look_up( $word, \%option_of );
             $term->addhistory($word);
         }
-    } else {
+    }
+    else {
         for my $word ( @ARGV ) {
             look_up( $word, \%option_of );
         }
