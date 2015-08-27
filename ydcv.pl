@@ -7,7 +7,8 @@ use autodie;
 use 5.010;
 
 use Carp;
-use Encode;
+use Encode::Locale;
+use Encode qw(decode);
 use Getopt::Long;
 use HTTP::Tiny;
 use JSON;
@@ -15,6 +16,7 @@ use List::Util qw(first);
 use Pod::Usage;
 use Term::ANSIColor;
 use Term::ReadLine;
+use Text::Wrap qw(wrap);
 use URI;
 use URI::QueryParam;
 
@@ -33,6 +35,21 @@ my $API_URI      = do {
     $api_uri->query_form_hash( \%query_params );
     $api_uri;
 };
+my $SPACE = q{ };
+my %WRAP_CONFIG = (
+    explanation => {
+        initial_tab => $SPACE x 2,
+        subsequent_tab => ( $SPACE x 5 ) . '*' . $SPACE,
+    },
+    reference_item => {
+        initial_tab => ( $SPACE x 5 ) . '*' . $SPACE,
+        subsequent_tab => $SPACE x 7,
+    },
+    reference => {
+        initial_tab => $SPACE x 2,
+        subsequent_tab => '',
+    },
+);
 
 sub build_api_url_with {
     my ( $query_params_ref ) = @_;
@@ -76,46 +93,58 @@ sub colored_method {
     }
 }
 
+sub wrap_text {
+    my ( $config_name, @text ) =  @_;
+
+    croak "Cannot find the wrap config for `$config_name`" if not defined $WRAP_CONFIG{ $config_name };
+
+    return wrap( ( @{ $WRAP_CONFIG{ $config_name } }{qw/initial_tab subsequent_tab/} ), @text );
+}
+
 sub print_explanation {
     my ( $dict_hash_ref, $option_hash_ref, $colored_methed_sub_ref ) = @_;
     print $colored_methed_sub_ref->( $dict_hash_ref->{'query'}, 'underline' );
-    if ( exists $dict_hash_ref->{'basic'} ) {
+    if ( defined $dict_hash_ref->{'basic'} ) {
         my $basic = $dict_hash_ref->{'basic'};
-        if ( exists $basic->{'phonetic'} ) {
+        if ( defined $basic->{'phonetic'} ) {
             printf " [%s]\n", $colored_methed_sub_ref->( $basic->{'phonetic'}, 'yellow' );
-        }
-        else {
+        } else {
             print "\n";
         }
-        if ( exists $basic->{'explains'} ) {
-            print $colored_methed_sub_ref->( '  Word Explanation:', 'cyan' ), "\n";
-            my @explains = @{ $basic->{'explains'} };
-            for my $explain (@explains) {
-                printf "     * %s\n", $explain;
-            }
-        }
-        else {
+
+        if ( defined $basic->{'explains'} ) {
+            my @explains = (
+                $colored_methed_sub_ref->( 'Word Explanation:', 'cyan' ),
+                @{ $basic->{'explains'} },
+            );
+            print wrap_text( 'explanation', join( "\n", @explains  ) );
             print "\n";
         }
-    }
-    elsif ( exists $dict_hash_ref->{'translation'} ) {
-        print "\n", $colored_methed_sub_ref->( '  Translation:', 'cyan' ), "\n";
-        my @translations = @{ $dict_hash_ref->{'translation'} };
-        for my $translation (@translations) {
-            printf "     * %s\n", $translation;
-        }
-    }
-    else {
+
+    } elsif ( defined $dict_hash_ref->{'translation'} ) {
+        print "\n";
+        my @translations = (
+            $colored_methed_sub_ref->( 'Translation:', 'cyan' ),
+            @{ $dict_hash_ref->{'translation'} },
+        );
+        print wrap_text( 'explanation', join( "\n", @translations ) );
         print "\n";
     }
 
-    if ( !$option_hash_ref->{'simple'} ) {
-        if ( exists $dict_hash_ref->{'web'} ) {
-            print "\n", $colored_methed_sub_ref->( '  Web Reference:', 'cyan' ), "\n";
-            my @web_references = $option_hash_ref->{'full'} ? @{ $dict_hash_ref->{'web'} } : @{ $dict_hash_ref->{'web'} }[0 .. 2];
-            for my $web_reference (@web_references) {
-                printf "     * %s\n       %s\n", $colored_methed_sub_ref->( $web_reference->{'key'}, 'yellow' ), join( '; ', map { $colored_methed_sub_ref->( $_, 'magenta' ) } @{ $web_reference->{'value'} } );
+
+    if ( not $option_hash_ref->{'simple'} ) {
+        if ( defined $dict_hash_ref->{'web'} ) {
+            print "\n";
+            my @web_references = (
+                $colored_methed_sub_ref->( 'Web Reference:', 'cyan' ),
+            );
+            my @web_text = $option_hash_ref->{'full'} ? @{ $dict_hash_ref->{'web'} } : @{ $dict_hash_ref->{'web'} }[0 .. 2];
+            for my $web ( @web_text ) {
+                my $key = $colored_methed_sub_ref->( $web->{'key'}, 'yellow' );
+                my $value = join( '; ', map { $colored_methed_sub_ref->( $_, 'magenta' ) } @{ $web->{'value'} } );
+                push @web_references, wrap_text( 'reference_item', join( "\n", $key, $value ) );
             }
+            print wrap_text( 'reference', join "\n", @web_references );
         }
     }
     print "\n";
@@ -142,28 +171,32 @@ sub look_up {
 }
 
 sub main {
-    binmode *STDIN,  ':encoding(utf8)';
-    binmode *STDOUT, ':encoding(utf8)';
-    binmode *STDERR, ':encoding(utf8)';
+    my @argv = map { decode( locale => $_, 1 ) } @_;
+    if ( -t ) {
+        binmode STDIN, ':encoding(console_in)';
+        binmode STDOUT, ':encoding(console_out)';
+        binmode STDERR, ':encoding(console_out)';
+    }
     my %option_of = (
-        color  => 'auto',
-        help   => 0,
-        full   => 0,
-        man    => 0,
-        simple => 0,
+        color => 'auto',
     );
     my @color_option = qw/
         always
         auto
         never
         /;
-    GetOptions(
-        'color=s'  => \$option_of{'color'},
-        'help|h'   => \$option_of{'help'},
-        'full|f'   => \$option_of{'full'},
-        'man'      => \$option_of{'man'},
-        'simple|s' => \$option_of{'simple'},
+
+    my $getopt = Getopt::Long::Parser->new;
+    croak 'Cannot parse options!' if not $getopt->getoptionsfromarray(
+        \@argv,
+        \%option_of,
+        'color=s',
+        'help|h',
+        'full|f',
+        'man',
+        'simple|s',
     );
+
     if ( $option_of{'help'} ) {
         pod2usage 1;
     }
@@ -173,22 +206,22 @@ sub main {
     if ( !first { $option_of{'color'} eq $_ } @color_option ) {
         croak "错误：不存在$option_of{'color'}选项！";
     }
-    if ( @ARGV == 0 ) {
+    if ( @argv == 0 ) {
         my $term = Term::ReadLine->new('YouDao Console Version');
         $term->ornaments(0);
-        while ( defined( my $word = $term->readline('> ') ) ) {
+        while ( defined( my $word = decode( locale => $term->readline('> '), 1 ) ) ) {
             look_up( $word, \%option_of );
             $term->addhistory($word);
         }
     }
     else {
-        for my $word ( @ARGV ) {
+        for my $word ( @argv ) {
             look_up( $word, \%option_of );
         }
     }
 }
 
-main;
+main( @ARGV );
 
 __END__
 
